@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.synctex(busy)
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.nav
+*.snm
+*.vrb
+*.lof
+*.lot
+*.idx
+*.ind
+*.ilg
+
+# Generated PDF (exclude compiled report, keep the phase PDF)
+report.pdf
+
+# Progress notes (local only)
+PROGRESS.md
+
+# Data (large raw log files)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
