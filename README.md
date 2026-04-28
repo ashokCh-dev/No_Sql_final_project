@@ -195,13 +195,3 @@ python3 main.py --pipeline mongodb --batch-size 50000 --input data/NASA_access_l
 python3 main.py --report --run-id <run_id>
 ```
 
----
-
-## What Comes Next (Phase 2)
-
-- Add Apache Pig pipeline (`pipelines/pig/`)
-- Add Apache Hive pipeline (`pipelines/hive/`)
-- Run all 4 pipelines on both Jul and Aug datasets with the same batch size
-- Compare: runtime, implementation complexity, batching behaviour, reporting suitability
-- Record video demo showing live pipeline selection and report output
-- Write compact PDF report with architecture, design decisions, and comparative analysis
