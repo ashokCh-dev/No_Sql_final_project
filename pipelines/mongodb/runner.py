@@ -19,17 +19,18 @@ import pymongo
 from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import MONGO_URI, MONGO_DB, MONGO_COLLECTION
+from config import MONGO_URI, MONGO_DB, MONGO_COLLECTION, STREAM_CHUNK_SIZE
 from db.connection import get_conn
-from pipelines.mapreduce.parser import parse_line
+from pipelines.common.parser import parse_line
 from pipelines.mongodb import loader
 
 
 # ── Preflight ──────────────────────────────────────────────────────────────────
 
-def _preflight(input_path: str) -> None:
-    if not os.path.isfile(input_path):
-        raise FileNotFoundError(f"Input file not found: {input_path}")
+def _preflight(input_files: list[str]) -> None:
+    for p in input_files:
+        if not os.path.isfile(p):
+            raise FileNotFoundError(f"Input file not found: {p}")
     try:
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
         client.admin.command('ping')
@@ -46,14 +47,14 @@ def _preflight(input_path: str) -> None:
 
 # ── PostgreSQL run record ──────────────────────────────────────────────────────
 
-def _create_run_record(conn, input_path: str, batch_size: int) -> int:
+def _create_run_record(conn, input_files: list[str]) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO pipeline_runs (pipeline_name, input_file, started_at, batch_size)
-            VALUES (%s, %s, %s, %s) RETURNING run_id
+            INSERT INTO pipeline_runs (pipeline_name, input_file, started_at)
+            VALUES (%s, %s, %s) RETURNING run_id
             """,
-            ('mongodb', input_path, datetime.now(timezone.utc), batch_size)
+            ('mongodb', ', '.join(input_files), datetime.now(timezone.utc))
         )
         run_id = cur.fetchone()[0]
     conn.commit()
@@ -84,74 +85,58 @@ def _create_indexes(collection) -> None:
 
 # ── Batch ingest ───────────────────────────────────────────────────────────────
 
-def _ingest_all_batches(pg_conn, collection, input_path: str,
-                        batch_size: int, run_id: int):
-    """
-    Read the log file in chunks of batch_size lines.
-    Parse each line; insert valid records into MongoDB with run_id stamped on each
-    document. Log every batch (including its malformed count) to batch_log in PG.
-    Returns (total_records, total_malformed, num_batches).
-    num_batches counts only non-empty batches (per project spec).
-    """
+def _ingest_all_batches(pg_conn, collection, input_files: list[str], run_id: int):
+    """One batch per input file. Within a file, insert_many in STREAM_CHUNK_SIZE chunks."""
     total_records   = 0
     total_malformed = 0
-    num_batches     = 0
-    batch_id        = 1
 
+    for batch_id, input_path in enumerate(input_files, start=1):
+        file_records, file_malformed = _ingest_one_file(
+            collection, input_path, run_id, batch_id
+        )
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO batch_log (run_id, batch_id, records_in_batch, malformed_in_batch)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (run_id, batch_id, file_records, file_malformed)
+            )
+        pg_conn.commit()
+        total_records   += file_records
+        total_malformed += file_malformed
+        print(f"  Batch {batch_id} ({os.path.basename(input_path)}): "
+              f"{file_records:>9,} records  ({file_malformed} malformed)")
+
+    return total_records, total_malformed, len(input_files)
+
+
+def _ingest_one_file(collection, input_path: str, run_id: int, batch_id: int) -> tuple[int, int]:
+    """Stream a single log file into MongoDB via insert_many chunks."""
+    file_records   = 0
+    file_malformed = 0
     buf: list[dict] = []
-    buf_malformed   = 0
-    lines_in_buf    = 0
 
     with open(input_path, 'r', encoding='utf-8', errors='replace') as fh:
         for raw_line in fh:
             record = parse_line(raw_line)
             if record is None:
-                buf_malformed += 1
+                file_malformed += 1
             else:
                 buf.append(record)
-            lines_in_buf += 1
 
-            if lines_in_buf == batch_size:
-                _flush_batch(pg_conn, collection, buf, buf_malformed, run_id, batch_id)
-                total_records   += len(buf)
-                total_malformed += buf_malformed
-                if buf:
-                    num_batches += 1
-                print(f"  Batch {batch_id:>4}: {len(buf):>7,} records  "
-                      f"({buf_malformed} malformed)")
-                batch_id     += 1
-                buf           = []
-                buf_malformed = 0
-                lines_in_buf  = 0
+            if len(buf) >= STREAM_CHUNK_SIZE:
+                docs = [{**r, 'run_id': run_id, 'batch_id': batch_id} for r in buf]
+                collection.insert_many(docs, ordered=False)
+                file_records += len(buf)
+                buf = []
 
-        # Final partial batch
-        if lines_in_buf > 0:
-            _flush_batch(pg_conn, collection, buf, buf_malformed, run_id, batch_id)
-            total_records   += len(buf)
-            total_malformed += buf_malformed
-            if buf:
-                num_batches += 1
-            print(f"  Batch {batch_id:>4}: {len(buf):>7,} records  "
-                  f"({buf_malformed} malformed)  [final]")
+        if buf:
+            docs = [{**r, 'run_id': run_id, 'batch_id': batch_id} for r in buf]
+            collection.insert_many(docs, ordered=False)
+            file_records += len(buf)
 
-    return total_records, total_malformed, num_batches
-
-
-def _flush_batch(pg_conn, collection, records: list[dict],
-                 malformed: int, run_id: int, batch_id: int) -> None:
-    if records:
-        docs = [{**r, 'run_id': run_id} for r in records]
-        collection.insert_many(docs, ordered=False)
-
-    with pg_conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO batch_log (run_id, batch_id, records_in_batch, malformed_in_batch)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (run_id, batch_id, len(records), malformed)
-        )
-    pg_conn.commit()
+    return file_records, file_malformed
 
 
 # ── Finalize ───────────────────────────────────────────────────────────────────
@@ -183,12 +168,12 @@ def _finalize_run(pg_conn, run_id: int, start_time: float,
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
-def run(input_path: str, batch_size: int) -> None:
+def run(inputs: list[str], query: str = 'all') -> None:
     print(f"[MongoDB] Starting ETL pipeline")
-    print(f"  Input:      {input_path}")
-    print(f"  Batch size: {batch_size:,}")
+    print(f"  Inputs:    {len(inputs)} file(s) — {[os.path.basename(p) for p in inputs]}")
+    print(f"  Query:     {query}")
 
-    _preflight(input_path)
+    _preflight(inputs)
 
     mongo_client = MongoClient(MONGO_URI)
     mongo_db     = mongo_client[MONGO_DB]
@@ -196,8 +181,8 @@ def run(input_path: str, batch_size: int) -> None:
 
     pg_conn = get_conn()
     try:
-        run_id = _create_run_record(pg_conn, input_path, batch_size)
-        print(f"  Run ID:     {run_id}")
+        run_id = _create_run_record(pg_conn, inputs)
+        print(f"  Run ID:    {run_id}")
 
         print("[MongoDB] Creating indexes...")
         _create_indexes(collection)
@@ -206,15 +191,18 @@ def run(input_path: str, batch_size: int) -> None:
 
         print("[MongoDB] Ingesting batches...")
         total_records, total_malformed, num_batches = _ingest_all_batches(
-            pg_conn, collection, input_path, batch_size, run_id
+            pg_conn, collection, inputs, run_id
         )
         print(f"  Total: {total_records:,} records | "
               f"{total_malformed:,} malformed | {num_batches} batches")
 
-        print("[MongoDB] Running aggregation pipelines...")
-        loader.load_q1(pg_conn, mongo_db, run_id)
-        loader.load_q2(pg_conn, mongo_db, run_id)
-        loader.load_q3(pg_conn, mongo_db, run_id)
+        print(f"[MongoDB] Running aggregation pipelines (query={query})...")
+        if query in ('q1', 'all'):
+            loader.load_q1(pg_conn, mongo_db, run_id)
+        if query in ('q2', 'all'):
+            loader.load_q2(pg_conn, mongo_db, run_id)
+        if query in ('q3', 'all'):
+            loader.load_q3(pg_conn, mongo_db, run_id)
 
         runtime = _finalize_run(pg_conn, run_id, start_time,
                                 total_records, total_malformed, num_batches)

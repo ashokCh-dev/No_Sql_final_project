@@ -1,5 +1,6 @@
 """
-Reads MapReduce HDFS output for each query and inserts results into PostgreSQL.
+Reads Hive output from HDFS for each query and inserts results into PostgreSQL.
+Hive's INSERT OVERWRITE DIRECTORY emits files named like 000000_0 (one per reducer).
 """
 
 import os
@@ -7,13 +8,12 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import HDFS_OUTPUT_DIR, JAVA_HOME
+from config import HDFS_HIVE_OUTPUT_DIR, JAVA_HOME
 from db.connection import fetch_run_meta
 
 
 def _read_hdfs_output(run_id: int, query_name: str) -> list[str]:
-    """Return all lines from an HDFS output directory (part-* files)."""
-    path = f'{HDFS_OUTPUT_DIR}/run_{run_id}/{query_name}/part-*'
+    path = f'{HDFS_HIVE_OUTPUT_DIR}/run_{run_id}/{query_name}/00*'
     env = {**os.environ, 'JAVA_HOME': JAVA_HOME}
     result = subprocess.run(
         ['hdfs', 'dfs', '-cat', path],
@@ -33,6 +33,8 @@ def load_q1(conn, run_id: int) -> None:
         log_date, status_code, req_count, total_bytes = parts
         rows.append((run_id, pipeline_name, started_at, log_date, int(status_code), int(req_count), int(total_bytes)))
 
+    rows.sort(key=lambda r: (r[3], r[4]))
+
     with conn.cursor() as cur:
         cur.executemany(
             """
@@ -49,21 +51,16 @@ def load_q1(conn, run_id: int) -> None:
 def load_q2(conn, run_id: int) -> None:
     pipeline_name, started_at = fetch_run_meta(conn, run_id)
     lines = _read_hdfs_output(run_id, 'q2')
-    all_rows = []
-    for line in lines:
+    rows = []
+    for rank, line in enumerate(lines, start=1):
         parts = line.split('\t')
         if len(parts) != 4:
             continue
         path, req_count, total_bytes, distinct_hosts = parts
-        all_rows.append((path, int(req_count), int(total_bytes), int(distinct_hosts)))
-
-    all_rows.sort(key=lambda r: r[1], reverse=True)
-    top20 = all_rows[:20]
-
-    rows = [
-        (run_id, pipeline_name, started_at, rank + 1, row[0], row[1], row[2], row[3])
-        for rank, row in enumerate(top20)
-    ]
+        rows.append((
+            run_id, pipeline_name, started_at, rank, path,
+            int(req_count), int(total_bytes), int(distinct_hosts),
+        ))
 
     with conn.cursor() as cur:
         cur.executemany(
@@ -75,7 +72,7 @@ def load_q2(conn, run_id: int) -> None:
             rows
         )
     conn.commit()
-    print(f"  Q2: inserted {len(rows)} rows (top 20 of {len(all_rows)} resources)")
+    print(f"  Q2: inserted {len(rows)} rows")
 
 
 def load_q3(conn, run_id: int) -> None:
@@ -95,9 +92,11 @@ def load_q3(conn, run_id: int) -> None:
             int(log_hour),
             int(err_count),
             int(total_count),
-            float(err_rate),
+            round(float(err_rate), 4),
             int(dist_hosts),
         ))
+
+    rows.sort(key=lambda r: (r[3], r[4]))
 
     with conn.cursor() as cur:
         cur.executemany(

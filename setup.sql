@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     started_at      TIMESTAMPTZ   NOT NULL,
     finished_at     TIMESTAMPTZ,
     runtime_seconds NUMERIC(10,3),
-    batch_size      INTEGER       NOT NULL,
     num_batches     INTEGER,
     total_records   BIGINT,
     malformed_count BIGINT,
@@ -21,27 +20,33 @@ CREATE TABLE IF NOT EXISTS batch_log (
 );
 
 CREATE TABLE IF NOT EXISTS q1_daily_traffic (
-    id            SERIAL   PRIMARY KEY,
-    run_id        INTEGER  NOT NULL REFERENCES pipeline_runs(run_id),
-    log_date      DATE     NOT NULL,
-    status_code   SMALLINT NOT NULL,
-    request_count BIGINT   NOT NULL,
-    total_bytes   BIGINT   NOT NULL
+    id             SERIAL      PRIMARY KEY,
+    run_id         INTEGER     NOT NULL REFERENCES pipeline_runs(run_id),
+    pipeline_name  VARCHAR(50),
+    execution_time TIMESTAMPTZ,
+    log_date       DATE        NOT NULL,
+    status_code    SMALLINT    NOT NULL,
+    request_count  BIGINT      NOT NULL,
+    total_bytes    BIGINT      NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS q2_top_resources (
-    id                  SERIAL   PRIMARY KEY,
-    run_id              INTEGER  NOT NULL REFERENCES pipeline_runs(run_id),
-    rank                SMALLINT NOT NULL,
-    resource_path       TEXT     NOT NULL,
-    request_count       BIGINT   NOT NULL,
-    total_bytes         BIGINT   NOT NULL,
-    distinct_host_count INTEGER  NOT NULL
+    id                  SERIAL      PRIMARY KEY,
+    run_id              INTEGER     NOT NULL REFERENCES pipeline_runs(run_id),
+    pipeline_name       VARCHAR(50),
+    execution_time      TIMESTAMPTZ,
+    rank                SMALLINT    NOT NULL,
+    resource_path       TEXT        NOT NULL,
+    request_count       BIGINT      NOT NULL,
+    total_bytes         BIGINT      NOT NULL,
+    distinct_host_count INTEGER     NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS q3_hourly_errors (
     id                   SERIAL       PRIMARY KEY,
     run_id               INTEGER      NOT NULL REFERENCES pipeline_runs(run_id),
+    pipeline_name        VARCHAR(50),
+    execution_time       TIMESTAMPTZ,
     log_date             DATE         NOT NULL,
     log_hour             SMALLINT     NOT NULL,
     error_request_count  BIGINT       NOT NULL,

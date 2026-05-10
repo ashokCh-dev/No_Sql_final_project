@@ -39,5 +39,6 @@ data/
 # OS
 .DS_Store
 Thumbs.db
-#latex
+
+# latex files
 *.tex

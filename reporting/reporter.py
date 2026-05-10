@@ -44,7 +44,7 @@ def generate_report(run_id: int) -> None:
                 return
 
             (rid, pipeline, input_file, started_at, finished_at,
-             runtime_sec, batch_size, num_batches, total_records,
+             runtime_sec, num_batches, total_records,
              malformed_count, avg_batch_size) = run
 
             SEP = '=' * 70
@@ -53,15 +53,26 @@ def generate_report(run_id: int) -> None:
             print(SEP)
             print(f"  Run ID          : {rid}")
             print(f"  Pipeline        : {pipeline}")
-            print(f"  Input File      : {input_file}")
+            print(f"  Input File(s)   : {input_file}")
             print(f"  Started At      : {started_at}")
             print(f"  Finished At     : {finished_at}")
             print(f"  Runtime         : {runtime_sec} seconds")
-            print(f"  Batch Size      : {batch_size:,}")
             print(f"  Num Batches     : {num_batches}")
             print(f"  Total Records   : {total_records:,}")
             print(f"  Malformed Count : {malformed_count:,}")
             print(f"  Avg Batch Size  : {avg_batch_size}")
+
+            # Per-batch sizes (one row per input file)
+            cur.execute(
+                "SELECT batch_id, records_in_batch, malformed_in_batch FROM batch_log "
+                "WHERE run_id = %s ORDER BY batch_id",
+                (run_id,),
+            )
+            batch_rows = cur.fetchall()
+            if batch_rows:
+                print(f"  Per-batch sizes :")
+                for bid, recs, malf in batch_rows:
+                    print(f"      Batch {bid}: {recs:,} records ({malf} malformed)")
 
             # ── Q1 ─────────────────────────────────────────────────────────────
             print()

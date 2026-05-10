@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import MONGO_COLLECTION
+from db.connection import fetch_run_meta
 
 
 # ── Q1 — Daily Traffic Summary ─────────────────────────────────────────────────
@@ -20,6 +21,7 @@ def load_q1(pg_conn, mongo_db, run_id: int) -> None:
     GROUP BY log_date, status_code
     → request_count = COUNT(*), total_bytes = SUM(bytes_transferred)
     """
+    pipeline_name, started_at = fetch_run_meta(pg_conn, run_id)
     collection = mongo_db[MONGO_COLLECTION]
 
     pipeline = [
@@ -39,6 +41,8 @@ def load_q1(pg_conn, mongo_db, run_id: int) -> None:
     for doc in collection.aggregate(pipeline, allowDiskUse=True):
         rows.append((
             run_id,
+            pipeline_name,
+            started_at,
             doc['_id']['log_date'],
             doc['_id']['status_code'],
             doc['request_count'],
@@ -49,8 +53,8 @@ def load_q1(pg_conn, mongo_db, run_id: int) -> None:
         cur.executemany(
             """
             INSERT INTO q1_daily_traffic
-                (run_id, log_date, status_code, request_count, total_bytes)
-            VALUES (%s, %s, %s, %s, %s)
+                (run_id, pipeline_name, execution_time, log_date, status_code, request_count, total_bytes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             rows
         )
@@ -66,6 +70,7 @@ def load_q2(pg_conn, mongo_db, run_id: int) -> None:
     → request_count, total_bytes, distinct_host_count
     Sort DESC by request_count, take top 20, assign rank 1–20.
     """
+    pipeline_name, started_at = fetch_run_meta(pg_conn, run_id)
     collection = mongo_db[MONGO_COLLECTION]
 
     pipeline = [
@@ -89,6 +94,8 @@ def load_q2(pg_conn, mongo_db, run_id: int) -> None:
             collection.aggregate(pipeline, allowDiskUse=True), start=1):
         rows.append((
             run_id,
+            pipeline_name,
+            started_at,
             rank,
             doc['_id'],
             doc['request_count'],
@@ -100,8 +107,8 @@ def load_q2(pg_conn, mongo_db, run_id: int) -> None:
         cur.executemany(
             """
             INSERT INTO q2_top_resources
-                (run_id, rank, resource_path, request_count, total_bytes, distinct_host_count)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (run_id, pipeline_name, execution_time, rank, resource_path, request_count, total_bytes, distinct_host_count)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             rows
         )
@@ -122,6 +129,7 @@ def load_q3(pg_conn, mongo_db, run_id: int) -> None:
     so error_host_set accumulates only hosts that triggered errors.
     (Requires MongoDB 3.6+; installed version is 8.0.)
     """
+    pipeline_name, started_at = fetch_run_meta(pg_conn, run_id)
     collection = mongo_db[MONGO_COLLECTION]
 
     pipeline = [
@@ -174,6 +182,8 @@ def load_q3(pg_conn, mongo_db, run_id: int) -> None:
     for doc in collection.aggregate(pipeline, allowDiskUse=True):
         rows.append((
             run_id,
+            pipeline_name,
+            started_at,
             doc['_id']['log_date'],
             doc['_id']['log_hour'],
             doc['error_request_count'],
@@ -186,9 +196,9 @@ def load_q3(pg_conn, mongo_db, run_id: int) -> None:
         cur.executemany(
             """
             INSERT INTO q3_hourly_errors
-                (run_id, log_date, log_hour, error_request_count,
+                (run_id, pipeline_name, execution_time, log_date, log_hour, error_request_count,
                  total_request_count, error_rate, distinct_error_hosts)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             rows
         )

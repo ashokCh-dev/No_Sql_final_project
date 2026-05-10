@@ -1,12 +1,12 @@
 ======================================================================
   PIPELINE RUN REPORT
 ======================================================================
-  Run ID          : 9
-  Pipeline        : mapreduce
+  Run ID          : 22
+  Pipeline        : hive
   Input File      : data/NASA_access_log_Jul95
-  Started At      : 2026-04-28 10:08:07.961574+00:00
-  Finished At     : 2026-04-28 10:11:17.078204+00:00
-  Runtime         : 183.183 seconds
+  Started At      : 2026-05-09 14:23:46.359647+00:00
+  Finished At     : 2026-05-09 14:26:18.349006+00:00
+  Runtime         : 140.258 seconds
   Batch Size      : 50,000
   Num Batches     : 38
   Total Records   : 1,889,667
