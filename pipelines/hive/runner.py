@@ -48,7 +48,7 @@ def _preflight(input_files: list[str]) -> None:
     if hive_exec is None:
         raise RuntimeError(
             f"Hive binary not found. Expected at {HIVE_BIN}.\n"
-            "Install: see INSTRUCTIONS.md (Apache Hive 3.1.3)."
+            "Install Apache Hive 3.1.3 to /home/ashok_ubun/hive and run schematool -dbType derby -initSchema."
         )
 
     result = _hdfs(['dfs', '-ls', '/'], check=False)
